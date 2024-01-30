@@ -8,6 +8,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 
 using namespace std;
 
@@ -27,8 +28,7 @@ public:
 };
 
 
-//La clase Vector representa un vector en el espacio tridimensional y
-//ofrece operaciones comunes como el cálculo del módulo, producto punto, etc.
+//La clase Vector representa un vector en el espacio tridimensional
 class Vector {
 public:
     double x, y, z;
@@ -49,10 +49,12 @@ public:
         return Vector(x - v.x, y - v.y, z - v.z);
     }
 
+    // producto punto de vectores
     double dot(const Vector &v) const {
         return x * v.x + y * v.y + z * v.z;
     }
 
+    // producto cruz entre vectores
     Vector cross(const Vector &v) const {
         return Vector(y * v.z - z * v.y, z * v.x - x * v.z, x * v.y - y * v.x);
     }
@@ -83,7 +85,6 @@ public:
 };
 
 //La clase Triangle representa un triángulo en el espacio 3D.
-//Aquí reutilizo la definición que proporcionaste, adaptándola a un estilo más convencional de C++.
 class Triangle {
 public:
     Point p0, p1, p2;
@@ -104,22 +105,57 @@ public:
     }
 };
 
-//La clase Plane representa un plano definido por puntos y una normal.
-class Plane {
+class SubPlane {
+private:
+    void generateTriangles() {
+        // Generar automáticamente 2 triángulos en función de los puntos
+        triangles.clear(); // Limpiar cualquier triángulo existente
+
+        // Supongamos que los puntos de cada triángulo se generan de alguna manera
+        // Aquí, simplemente se crean puntos de ejemplo
+        Point p0 = points[0];
+        Point p1 = points[1];
+        Point p2 = points[2];
+        triangles.push_back(Triangle(p0, p1, p2, 0));
+
+        Point p3 = points[2];
+        Point p4 = points[3];
+        triangles.push_back(Triangle(p2, p3, p4, 1));
+    }
+
+
 public:
-    Point points[4]; // Asumiendo que el plano se define con cuatro puntos
+    Point points[4];
     Vector normal;
+    int subPlaneID;
     vector<Triangle> triangles;
 
-    Plane() {}
-
-    Plane(const Point &p0, const Point &p1, const Point &p2, const Point &p3) {
+    SubPlane(int subPlaneID, const Point &p0, const Point &p1, const Point &p2, const Point &p3) {
         points[0] = p0;
         points[1] = p1;
         points[2] = p2;
         points[3] = p3;
+        subPlaneID = subPlaneID;
+        generateTriangles();
+    }
+};
+
+//La clase Plane representa un plano definido por puntos y una normal.
+class Plane {
+public:
+    Point points[4];
+    Vector normal;
+    int planeID;
+    std::vector<SubPlane> subPlanes;
+
+    Plane(int planeID, const Point &p0, const Point &p1, const Point &p2, const Point &p3) {
+        points[0] = p0;
+        points[1] = p1;
+        points[2] = p2;
+        points[3] = p3;
+        planeID = planeID;
         calculateNormal();
-        // Aquí también puedes inicializar los triángulos si es necesario
+        createSubPlanes(1);
     }
 
     void calculateNormal() {
@@ -127,17 +163,48 @@ public:
         Vector v1 = points[2] - points[0];
         normal = v0.cross(v1).normalize();
     }
+
+    void createSubPlanes(int horizontalVerticalSlices) {
+        // Calculate the distance from p0 to p1
+        double distance = Vector(points[1] - points[0]).modulo();
+
+        // Calculate the step size for slices
+        double stepSize = distance / horizontalVerticalSlices;
+
+        // Number of subplanes = slices * slices
+        int subplaneCount = horizontalVerticalSlices * horizontalVerticalSlices;
+
+        // Generate subplanes
+        for (int i = 0; i < horizontalVerticalSlices; ++i) {
+            for (int j = 0; j < horizontalVerticalSlices; ++j) {
+                double offsetX = static_cast<double>(i) * stepSize / distance;
+                double offsetY = static_cast<double>(j) * stepSize / distance;
+
+                Point subplanePoints[4];
+                for (int k = 0; k < 4; ++k) {
+                    Vector subplaneVector = Vector(points[k]) + normal * offsetX + normal * offsetY;
+                    subplanePoints[k] = Point(subplaneVector.x, subplaneVector.y, subplaneVector.z);
+                }
+
+                subPlanes.push_back(SubPlane(subplaneCount, subplanePoints[0], subplanePoints[1], subplanePoints[2],
+                                             subplanePoints[3]));
+                subplaneCount++;
+            }
+        }
+    }
 };
 
 class ResidualEnergy {
 public:
     double energy;
     int planeIndex;
+    int subPlaneIndex;
     int triangleIndex;
     Vector reflectedDirection;
 
-    ResidualEnergy(double energy, int planeIndex, int triangleIndex, const Vector &reflectedDirection)
-            : energy(energy), planeIndex(planeIndex), triangleIndex(triangleIndex),
+    ResidualEnergy(double energy, int planeIndex, int subPlaneIndex, int triangleIndex,
+                   const Vector &reflectedDirection)
+            : energy(energy), planeIndex(planeIndex), subPlaneIndex(subPlaneIndex), triangleIndex(triangleIndex),
               reflectedDirection(reflectedDirection) {}
 };
 
@@ -152,7 +219,6 @@ public:
 
     Source(const Point &p, int nRays) : p(p), NRays(nRays) {
         Rays = new Vector[nRays];
-        // Aquí debes implementar la lógica para inicializar los rayos
     }
 
     ~Source() {
@@ -181,41 +247,47 @@ public:
 // La clase Room representa la habitación, es decir, el espacio en el que se realizará el trazado de rayos.
 class Room {
 public:
-    vector<vector<ResidualEnergy>> residualEnergies; // Almacenamiento de energías residuales
-    Plane planes[6]; // Asumiendo que la habitación es un cubo
+    vector<vector<ResidualEnergy>> residualEnergies;
+    std::vector<Plane> planes;
 
-public:
-    //Plane planes[6]; // Asumiendo que la habitación es un cubo
+private:
+    std::vector<Plane> createCube(double edgeSize) {
+        std::vector<Plane> result;
 
-    Room() {}
+        // Assuming that the cube is centered at the origin
+        Point vertices[8] = {
+                Point(-edgeSize / 2, -edgeSize / 2, -edgeSize / 2),
+                Point(edgeSize / 2, -edgeSize / 2, -edgeSize / 2),
+                Point(edgeSize / 2, -edgeSize / 2, edgeSize / 2),
+                Point(-edgeSize / 2, -edgeSize / 2, edgeSize / 2),
+                Point(-edgeSize / 2, edgeSize / 2, -edgeSize / 2),
+                Point(edgeSize / 2, edgeSize / 2, -edgeSize / 2),
+                Point(edgeSize / 2, edgeSize / 2, edgeSize / 2),
+                Point(-edgeSize / 2, edgeSize / 2, edgeSize / 2)
+        };
 
-    Room(const Plane &p0, const Plane &p1, const Plane &p2,
-         const Plane &p3, const Plane &p4, const Plane &p5) {
-        planes[0] = p0;
-        planes[1] = p1;
-        planes[2] = p2;
-        planes[3] = p3;
-        planes[4] = p4;
-        planes[5] = p5;
+        // Create the planes of the cube
+        result.push_back(Plane(0, vertices[0], vertices[1], vertices[2], vertices[3]));
+        result.push_back(Plane(1, vertices[4], vertices[5], vertices[6], vertices[7]));
+        result.push_back(Plane(2, vertices[0], vertices[3], vertices[7], vertices[4]));
+        result.push_back(Plane(3, vertices[1], vertices[2], vertices[6], vertices[5]));
+        result.push_back(Plane(4, vertices[0], vertices[1], vertices[5], vertices[4]));
+        result.push_back(Plane(5, vertices[2], vertices[3], vertices[7], vertices[6]));
+
+        return result;
     }
 
+public:
+    Room(double edgeSize)
+            : residualEnergies(), planes(createCube(edgeSize)) {
+    }
 
     void TraceRays(Source &source, double alpha, double delta, double initialEnergy) {
-        const int maxReflections = 50;
+        const int maxReflections = 50; //TODO THIS MIGH BE ON DEFINE OR PASS IT TO METHOD
         residualEnergies.resize(source.NRays); // Asegurarse de que tiene el tamaño adecuado
 
-
-        // Ejemplo de cómo inicializar los triángulos para cada plano:
-        for (int i = 0; i < 6; ++i) {
-            // Suponiendo que cada plano se divide en dos triángulos para simplificar
-            planes[i].triangles.push_back(
-                    Triangle(planes[i].points[0], planes[i].points[1], planes[i].points[2], i * 2));
-            planes[i].triangles.push_back(
-                    Triangle(planes[i].points[2], planes[i].points[3], planes[i].points[0], i * 2 + 1));
-        }
-
         for (int r = 0; r < source.NRays; ++r) {
-            Vector rayDirection = source.Rays[r]; // Asumiendo que 'Rays' es un array de 'Vector'
+            Vector rayDirection = source.Rays[r];
             Point rayOrigin = source.p;
             double energy = initialEnergy;
             int reflections = 0;
@@ -224,35 +296,44 @@ public:
                 double closestDistance = numeric_limits<double>::max();
                 Point intersectionPoint;
                 int hitPlaneIndex = -1;
+                int hitSubPlaneIndex = -1;
                 int hitTriangleIndex = -1;
 
                 // Buscar la intersección más cercana
-                for (int p = 0; p < 6; ++p) {
-                    Plane &plane = planes[p];
-                    for (int t = 0; t < plane.triangles.size(); ++t) {
-                        double distance;
-                        Point tempIntersectionPoint;
-                        if (RayIntersectsTriangle(rayOrigin, rayDirection, plane.triangles[t], tempIntersectionPoint,
-                                                  distance)) {
-                            if (distance < closestDistance) {
-                                closestDistance = distance;
-                                intersectionPoint = tempIntersectionPoint;
-                                hitPlaneIndex = p;
-                                hitTriangleIndex = t; // Store the triangle index
+                for (int planeID = 0; planeID < planes.size(); ++planeID) {
+                    Plane &plane = planes[planeID];
+                    //cout << "Plane ID:" << planeID<< endl;
+                    for (int subPlaneID = 0; subPlaneID < plane.subPlanes.size(); ++subPlaneID) {
+                        SubPlane &subPlane = plane.subPlanes[subPlaneID];
+                        // cout << "Sub Plane ID:" << subPlaneID<< endl;
+                        for (int triangleID = 0; triangleID < subPlane.triangles.size(); ++triangleID) {
+                            //   cout << "Triangle ID:" << triangleID << endl;
+                            double distance;
+                            Point tempIntersectionPoint;
+                            if (RayIntersectsTriangle(rayOrigin, rayDirection, subPlane.triangles[triangleID],
+                                                      tempIntersectionPoint,
+                                                      distance)) {
+                                if (distance < closestDistance) {
+                                    closestDistance = distance;
+                                    intersectionPoint = tempIntersectionPoint;
+                                    hitPlaneIndex = planeID;
+                                    hitSubPlaneIndex = subPlaneID;
+                                    hitTriangleIndex = triangleID; // Store the triangle index
+                                }
                             }
                         }
                     }
                 }
 
-                if (hitPlaneIndex != -1) {
+                if (hitTriangleIndex != -1) {
                     // Actualizar origen del rayo y calcular la dirección reflejada
                     rayOrigin = intersectionPoint;
-                    rayDirection = ReflectRay(rayDirection, planes[hitPlaneIndex].normal);
+                    rayDirection = ReflectRay(rayDirection, planes[hitSubPlaneIndex].normal);
 
                     // Calcular energía residual
                     energy *= (1 - alpha) * (1 - delta); // Asumiendo que alpha y delta son conocidos
                     residualEnergies[r].push_back(
-                            ResidualEnergy(energy, hitPlaneIndex, hitTriangleIndex, rayDirection));
+                            ResidualEnergy(energy, hitPlaneIndex, hitSubPlaneIndex, hitTriangleIndex, rayDirection));
 
                     ++reflections;
                 } else {
@@ -263,7 +344,6 @@ public:
         }
     }
 
-    // Opcional: Manejar las energías residuales como se requiera
     const vector<vector<ResidualEnergy>> &getResidualEnergies() const {
         return residualEnergies;
     }
@@ -276,8 +356,8 @@ public:
                 ResidualEnergy residualEnergy = getResidualEnergies()[rayIndex][bounceIndex];
                 cout << " ---->Reflection number: " << bounceIndex + 1 << " Residual Energy:" << residualEnergy.energy
                      << "<-----\n";
-                cout << " Plane Index:" << residualEnergy.planeIndex << " Triangle Index:"
-                     << residualEnergy.triangleIndex << "\n";
+                cout << " Plane Index:" << residualEnergy.planeIndex << " SubPlane Index:"
+                     << residualEnergy.subPlaneIndex << " Triangle Index:" << residualEnergy.triangleIndex << "\n";
                 cout << " Ray Reflex direction:" << printf("x:%f,y:%f,z:%f", residualEnergy.reflectedDirection.x,
                                                            residualEnergy.reflectedDirection.y,
                                                            residualEnergy.reflectedDirection.z) << "\n";
@@ -286,11 +366,18 @@ public:
     }
 
     void saveResultsToFile() const {
+        // Get the current working directory on your computer uncoment this line
+        //std::filesystem::path currentPath = std::filesystem::current_path();
+        const string OUTPUT_PATH = "D:\\Repositories\\ProyectoSim\\output\\";
+
+        // Specify the output folder name
+        std::string outputFolder = "output";
         // Residual Energies Files
         for (size_t rayIndex = 0; rayIndex < getResidualEnergies().size(); ++rayIndex) {
-            // Create a stringstream to format the file name
             std::ostringstream fileNameStream;
-            fileNameStream << R"(D:\Repositories\ProyectoSim\output\ResidualEnergies_Ray_)" << rayIndex << ".txt";
+            // uncomment this line on your pc
+            //fileNameStream << outputFolder << "/ResidualEnergies_Ray_" << rayIndex << ".txt";
+            fileNameStream << OUTPUT_PATH << R"(ResidualEnergies_Ray_)" << rayIndex << ".txt";
             std::string fileName = fileNameStream.str();
             std::ofstream outputFile(fileName, std::ios::out);
 
@@ -303,12 +390,13 @@ public:
             for (size_t bounceIndex = 0; bounceIndex < getResidualEnergies()[rayIndex].size(); ++bounceIndex) {
                 if (bounceIndex == 0) {
                     outputFile
-                            << "index,residualEnergy,planeIndex,triangleIndex,reflectionDirectionX,reflectionDirectionY,reflectionDirectionZ";
+                            << "index,residualEnergy,planeIndex,subPlaneIndex,triangleIndex,reflectionDirectionX,reflectionDirectionY,reflectionDirectionZ"<<endl;
                 }
                 ResidualEnergy residualEnergy = getResidualEnergies()[rayIndex][bounceIndex];
                 Vector direction = residualEnergy.reflectedDirection;
                 outputFile << bounceIndex << "," << residualEnergy.energy << ","
-                           << residualEnergy.planeIndex << "," << residualEnergy.triangleIndex << ","
+                           << residualEnergy.planeIndex << "," << residualEnergy.subPlaneIndex << ","
+                           << residualEnergy.triangleIndex << ","
                            << residualEnergy.reflectedDirection.x << "," << residualEnergy.reflectedDirection.y << ","
                            << residualEnergy.reflectedDirection.z << "\t";
                 outputFile << '\n';
@@ -323,37 +411,50 @@ public:
                                const Triangle &triangle, Point &intersectionPoint, double &distance) {
         const double EPSILON = 1e-6;
 
-        Vector edge1 = triangle.p1 - triangle.p0;
-        Vector edge2 = triangle.p2 - triangle.p0;
+        // Calculate vectors representing edges of the triangle
+        Vector triangleEdge1 = triangle.p1 - triangle.p0;
+        Vector triangleEdge2 = triangle.p2 - triangle.p0;
 
-        Vector h = rayDirection.cross(edge2);
-        double a = edge1.dot(h);
+        // Calculate the cross product of the ray direction and triangle edge2
+        Vector h = rayDirection.cross(triangleEdge2);
+        double determinant = triangleEdge1.dot(h);
 
-        if (a > -EPSILON && a < EPSILON)
-            return false; // Ray is parallel to the triangle plane
+        // Check if the ray is parallel to the triangle plane
+        if (determinant > -EPSILON && determinant < EPSILON)
+            return false;
 
-        double f = 1.0 / a;
-        Vector s = rayOrigin - triangle.p0;
-        double u = f * s.dot(h);
+        // Calculate the reciprocal of the determinant
+        double determinantReciprocal = 1.0 / determinant;
 
+        // Calculate vectors used for barycentric coordinates
+        Vector rayOriginToVertex = rayOrigin - triangle.p0;
+        double u = determinantReciprocal * rayOriginToVertex.dot(h);
+
+        // Check if the intersection point is outside the triangle
         if (u < 0.0 || u > 1.0)
             return false;
 
-        Vector q = s.cross(edge1);
-        double v = f * rayDirection.dot(q);
+        Vector q = rayOriginToVertex.cross(triangleEdge1);
+        double v = determinantReciprocal * rayDirection.dot(q);
 
+        // Check if the intersection point is outside the triangle
         if (v < 0.0 || u + v > 1.0)
             return false;
 
-        distance = f * edge2.dot(q);
+        // Calculate the distance to the intersection point
+        distance = determinantReciprocal * triangleEdge2.dot(q);
+
+        // Check if the intersection point is in front of the ray
         if (distance > EPSILON) {
+            // Calculate the intersection point coordinates
             intersectionPoint.x = rayOrigin.x + rayDirection.x * distance;
             intersectionPoint.y = rayOrigin.y + rayDirection.y * distance;
             intersectionPoint.z = rayOrigin.z + rayDirection.z * distance;
             return true;
         }
 
-        return false; // Intersection behind the ray's origin
+        // Intersection behind the ray's origin
+        return false;
     }
 
     Vector ReflectRay(const Vector &ray, const Vector &normal) {
